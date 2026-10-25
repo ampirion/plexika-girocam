@@ -42,11 +42,11 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors(request)});
     const configured = typeof env.PAIRING_KEY === 'string' && env.PAIRING_KEY.length >= 24;
     if (request.method === 'GET' && u.pathname === '/health') {
-      return json(request, {service: 'Plexika Girocam relay', protocol: 2, ready: !!env.ALLOCATOR&&!!env.ROOMS, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
+      return json(request, {service: 'Plexika Girocam relay', protocol: 3, ready: !!env.ALLOCATOR&&!!env.ROOMS, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
     }
     if (request.method === 'GET' && u.pathname === '/') {
       const text = !!env.ALLOCATOR&&!!env.ROOMS
-        ? 'Сервер гирокама v2 готов. Открытый доступ: до 100 сеансов и очередь. Основной PAIRING_KEY пользователям не нужен. Бесплатные квоты Cloudflare остаются ограничением.'
+        ? 'Сервер гирокама v3 готов. Открытый доступ: до 100 сеансов и очередь. Основной PAIRING_KEY пользователям не нужен. Бесплатные квоты Cloudflare остаются ограничением.'
         : 'Не хватает привязок сервера v2. Загрузите весь пакет обновления, включая wrangler.jsonc и src/allocator.js. Для публичного режима PAIRING_KEY не требуется.';
       return new Response('<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Plexika Girocam relay</title><body style="background:#102632;color:#deeff7;font:18px system-ui;max-width:700px;margin:12vh auto;padding:24px"><h1>Plexika Girocam relay</h1><p>' + text + '</p><p>Телефон подключается по QR из редактора. Сеанс действует два часа.</p><a style="color:#8ce0ff" href="/health">Проверка состояния</a></body></html>', {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}});
     }
@@ -80,6 +80,36 @@ export default {
   },
 };
 
+// All v3 packets remain scoped to the authenticated host/phone WebSocket role.
+const arr=(a,n,limit=1e9)=>Array.isArray(a)&&a.length===n&&a.every(x=>Number.isFinite(x)&&Math.abs(x)<=limit);
+const uuid=s=>typeof s==='string'&&/^[a-f0-9-]{36}$/.test(s);
+function validHost3(p){switch(p.type){
+case 'clock_pong':return uuid(p.id)&&Number.isFinite(p.t)&&Number.isFinite(p.host);
+case 'scene_begin':return uuid(p.id)&&Number.isInteger(p.total)&&p.total>=0&&p.total<=500;
+case 'scene_chunk':return uuid(p.id)&&Array.isArray(p.objects)&&p.objects.length<=12&&p.objects.every(o=>o&&['box','sphere','plane'].includes(o.kind)&&typeof o.name==='string'&&o.name.length<=96&&arr(o.p,3)&&arr(o.s,3)&&o.s.every(x=>x>=0)&&arr(o.q,4,1.01)&&Math.abs(Math.hypot(...o.q)-1)<.01);
+case 'scene_end':return uuid(p.id);
+case 'pose_sync':return p.pose&&arr(p.pose.p,3)&&arr(p.pose.target,3)&&arr(p.pose.q,4,1.01)&&Math.abs(Math.hypot(...p.pose.q)-1)<.01&&Number.isFinite(p.pose.fov)&&p.pose.fov>=5&&p.pose.fov<=150&&typeof p.enabled==='boolean'&&Number.isFinite(p.gain)&&p.gain>=.1&&p.gain<=2&&Number.isFinite(p.smoothing)&&p.smoothing>=0&&p.smoothing<=.95;
+case 'settings':return typeof p.enabled==='boolean'&&Number.isFinite(p.gain)&&p.gain>=.1&&p.gain<=2&&Number.isFinite(p.smoothing)&&p.smoothing>=0&&p.smoothing<=.95;
+case 'record_start':return uuid(p.id)&&Number.isFinite(p.t0);
+case 'record_stop':return uuid(p.id)&&Number.isFinite(p.end);
+case 'record_ack':return uuid(p.id)&&Number.isInteger(p.index)&&p.index>=-1&&p.index<=1252;
+case 'record_saved':return uuid(p.id);
+case 'record_rejected':return uuid(p.id)&&typeof p.message==='string'&&p.message.length<=200;
+default:return false;}}
+function validPhone3(p){switch(p.type){
+case 'hello':return p.capabilities===3;
+case 'camera_pose':return arr(p.p,3)&&arr(p.target,3)&&Number.isFinite(p.at)&&Math.hypot(...p.p.map((x,i)=>x-p.target[i]))>.01;
+case 'sensor_state':return typeof p.active==='boolean';
+case 'clock_ping':return uuid(p.id)&&Number.isFinite(p.t);
+case 'record_mode':return typeof p.exact==='boolean';
+case 'calibrate_request':case 'finish_request':case 'disconnect_notice':return true;
+case 'record_ready':return uuid(p.id)&&Number.isFinite(p.uncertainty)&&p.uncertainty>=0&&p.uncertainty<10000;
+case 'record_error':return uuid(p.id)&&typeof p.message==='string'&&p.message.length<=200;
+case 'record_begin':return uuid(p.id)&&Number.isInteger(p.total)&&p.total>=1&&p.total<=60004&&Number.isInteger(p.chunks)&&p.chunks===Math.ceil(p.total/48)&&Number.isFinite(p.duration)&&p.duration>=0&&p.duration<=1000001&&Number.isFinite(p.uncertainty)&&p.uncertainty>=0&&p.uncertainty<10000;
+case 'record_chunk':return uuid(p.id)&&Number.isInteger(p.index)&&p.index>=0&&p.index<1251&&Array.isArray(p.frames)&&p.frames.length>=1&&p.frames.length<=48&&p.frames.every((f,i)=>arr(f,7)&&f[0]>=0&&f[0]<=1000001&&(!i||f[0]>=p.frames[i-1][0]));
+case 'record_end':case 'record_resume':case 'saved_ack':return uuid(p.id);
+default:return false;}}
+
 export class PlexikaRoom {
  constructor(ctx,env){this.ctx=ctx;this.env=env;}
  sockets(role){return this.ctx.getWebSockets(role).filter(w=>w.readyState===1);}
@@ -89,14 +119,16 @@ export class PlexikaRoom {
  async fetch(request){const u=new URL(request.url);if(u.hostname==='room.internal'){
  if(u.pathname==='/revoke'&&request.method==='POST'){await this.revoke();return new Response('Revoked');}
  if(u.pathname==='/init'&&request.method==='POST'){if(await this.ctx.storage.get('meta'))return new Response('Already initialized',{status:409});const meta=await request.json();await this.ctx.storage.put('meta',meta);await this.ctx.storage.setAlarm(meta.expiresAt);return new Response('Created',{status:201});}}
- const meta=await this.ctx.storage.get('meta');if(!meta||meta.expiresAt<=Date.now()||(meta.pendingUntil&&meta.pendingUntil<=Date.now()))return new Response('Session expired',{status:410});if(request.headers.get('Upgrade')?.toLowerCase()!=='websocket')return new Response('WebSocket required',{status:426});const role=u.searchParams.get('role');if(!['host','phone'].includes(role)||!same(u.searchParams.get('token'),meta[role+'Token']))return new Response('Invalid token',{status:401});if(this.sockets(role).length)return new Response('Role already connected',{status:409});const pair=new WebSocketPair(),server=pair[1];meta.pendingUntil=role==='host'&&!this.sockets('phone').length?Date.now()+180000:null;await this.ctx.storage.put('meta',meta);await this.ctx.storage.setAlarm(Math.min(meta.expiresAt,meta.pendingUntil||meta.expiresAt));this.ctx.acceptWebSocket(server,[role]);server.serializeAttachment({role,second:0,count:0});const other=role==='host'?'phone':'host';this.send(server,{type:'peer',connected:this.sockets(other).length>0});for(const w of this.sockets(other))this.send(w,{type:'peer',connected:true});if(role==='host')await this.notify(meta,'claimed');return new Response(null,{status:101,webSocket:pair[0]});}
- async webSocketMessage(ws,message){const a=ws.deserializeAttachment(),meta=await this.ctx.storage.get('meta');if(!a||!meta||meta.expiresAt<=Date.now()){ws.close(1008,'Session expired');return;}if(typeof message!=='string'||message.length>(a.role==='host'?65536:2048)){ws.close(1009,'Too large');return;}const second=Math.floor(Date.now()/1000);if(a.second!==second){a.second=second;a.count=0;}a.count++;ws.serializeAttachment(a);if(a.count>(a.role==='host'?12:60)){ws.close(1008,'Rate exceeded');return;}let p;try{p=JSON.parse(message);}catch{ws.close(1008,'Invalid JSON');return;}if(!p||typeof p!=='object'){ws.close(1008,'Invalid packet');return;}if(p.type==='ping'){this.send(ws,{type:'pong'});return;}
+ const meta=await this.ctx.storage.get('meta');if(!meta||meta.expiresAt<=Date.now()||(meta.pendingUntil&&meta.pendingUntil<=Date.now()))return new Response('Session expired',{status:410});if(request.headers.get('Upgrade')?.toLowerCase()!=='websocket')return new Response('WebSocket required',{status:426});const role=u.searchParams.get('role');if(!['host','phone'].includes(role)||!same(u.searchParams.get('token'),meta[role+'Token']))return new Response('Invalid token',{status:401});const previous=this.sockets(role);if(previous.length&&role==='host')return new Response('Role already connected',{status:409});const pair=new WebSocketPair(),server=pair[1];meta.pendingUntil=role==='host'&&!this.sockets('phone').length?Date.now()+180000:null;await this.ctx.storage.put('meta',meta);await this.ctx.storage.setAlarm(Math.min(meta.expiresAt,meta.pendingUntil||meta.expiresAt));this.ctx.acceptWebSocket(server,[role]);server.serializeAttachment({role,second:0,count:0});for(const old of previous)try{old.close(1000,'Phone reconnected');}catch{}const other=role==='host'?'phone':'host';this.send(server,{type:'peer',connected:this.sockets(other).length>0});for(const w of this.sockets(other))this.send(w,{type:'peer',connected:true});if(role==='host')await this.notify(meta,'claimed');return new Response(null,{status:101,webSocket:pair[0]});}
+ async webSocketMessage(ws,message){if(ws.readyState!==1)return;const a=ws.deserializeAttachment(),meta=await this.ctx.storage.get('meta');if(!a||!meta||meta.expiresAt<=Date.now()){ws.close(1008,'Session expired');return;}if(typeof message!=='string'||message.length>65536){ws.close(1009,'Too large');return;}const second=Math.floor(Date.now()/1000);if(a.second!==second){a.second=second;a.count=0;}a.count++;ws.serializeAttachment(a);if(a.count>(a.role==='host'?30:60)){ws.close(1008,'Rate exceeded');return;}let p;try{p=JSON.parse(message);}catch{ws.close(1008,'Invalid JSON');return;}if(!p||typeof p!=='object'){ws.close(1008,'Invalid packet');return;}if(p.type==='ping'){this.send(ws,{type:'pong'});return;}
  if(a.role==='host'){
+ if(validHost3(p)){for(const phone of this.sockets('phone'))this.send(phone,p);return;}
  if(p.type==='recording'&&typeof p.active==='boolean'){await this.notify(meta,'recording',p.active);return;}
  if(p.type==='preview'&&typeof p.data==='string'&&p.data.startsWith('data:image/jpeg;base64,')&&p.data.length<=60000&&p.w===320&&p.h===180){for(const phone of this.sockets('phone'))this.send(phone,{type:'preview',v:2,data:p.data,w:320,h:180});return;}
  if(p.type==='freeze_ack'&&typeof p.held==='boolean'){for(const phone of this.sockets('phone'))this.send(phone,{type:'freeze_ack',held:p.held});return;}
  ws.close(1008,'Invalid host command');return;}
  if(!same(p.token,meta.phoneToken)){ws.close(1008,'Invalid packet token');return;}
+ if(p.v===3&&validPhone3(p)){for(const host of this.sockets('host'))this.send(host,p);return;}
  let data=null;
  if(p.type==='orientation'&&p.v===1&&['alpha','beta','gamma','screen','at'].every(k=>Number.isFinite(p[k]))&&Math.abs(p.alpha)<=720&&Math.abs(p.beta)<=360&&Math.abs(p.gamma)<=360&&Math.abs(p.screen)<=720)data={v:1,type:'orientation',token:meta.phoneToken,alpha:p.alpha,beta:p.beta,gamma:p.gamma,screen:p.screen,at:p.at};
  else if(p.type==='zoom'&&p.v===2&&Number.isFinite(p.delta))data={v:2,type:'zoom',token:meta.phoneToken,delta:Math.max(-.25,Math.min(.25,p.delta))};
