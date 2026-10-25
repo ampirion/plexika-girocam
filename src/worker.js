@@ -42,11 +42,11 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors(request)});
     const configured = typeof env.PAIRING_KEY === 'string' && env.PAIRING_KEY.length >= 24;
     if (request.method === 'GET' && u.pathname === '/health') {
-      return json(request, {service: 'Plexika Girocam relay', protocol: 3, ready: !!env.ALLOCATOR&&!!env.ROOMS, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
+      return json(request, {service: 'Plexika Girocam relay', protocol: 4, ready: !!env.ALLOCATOR&&!!env.ROOMS, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
     }
     if (request.method === 'GET' && u.pathname === '/') {
       const text = !!env.ALLOCATOR&&!!env.ROOMS
-        ? 'Сервер гирокама v3 готов. Открытый доступ: до 100 сеансов и очередь. Основной PAIRING_KEY пользователям не нужен. Бесплатные квоты Cloudflare остаются ограничением.'
+        ? 'Сервер гирокама v4 готов. Открытый доступ: до 100 сеансов и очередь. Основной PAIRING_KEY пользователям не нужен. Бесплатные квоты Cloudflare остаются ограничением.'
         : 'Не хватает привязок сервера v2. Загрузите весь пакет обновления, включая wrangler.jsonc и src/allocator.js. Для публичного режима PAIRING_KEY не требуется.';
       return new Response('<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Plexika Girocam relay</title><body style="background:#102632;color:#deeff7;font:18px system-ui;max-width:700px;margin:12vh auto;padding:24px"><h1>Plexika Girocam relay</h1><p>' + text + '</p><p>Телефон подключается по QR из редактора. Сеанс действует два часа.</p><a style="color:#8ce0ff" href="/health">Проверка состояния</a></body></html>', {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}});
     }
@@ -84,6 +84,9 @@ export default {
 const arr=(a,n,limit=1e9)=>Array.isArray(a)&&a.length===n&&a.every(x=>Number.isFinite(x)&&Math.abs(x)<=limit);
 const uuid=s=>typeof s==='string'&&/^[a-f0-9-]{36}$/.test(s);
 function validHost3(p){switch(p.type){
+case 'full_begin':return uuid(p.id)&&Number.isInteger(p.length)&&p.length>0&&p.length<=64*1024*1024&&p.chunks===Math.ceil(p.length/40000)&&typeof p.hash==='string'&&/^[0-9a-f]{64}$/.test(p.hash)&&typeof p.media==='boolean';
+case 'full_chunk':return uuid(p.id)&&Number.isInteger(p.index)&&p.index>=0&&p.index<1678&&typeof p.data==='string'&&p.data.length<=40000;
+case 'full_end':case 'full_cancel':return uuid(p.id);
 case 'clock_pong':return uuid(p.id)&&Number.isFinite(p.t)&&Number.isFinite(p.host);
 case 'scene_begin':return uuid(p.id)&&Number.isInteger(p.total)&&p.total>=0&&p.total<=500;
 case 'scene_chunk':return uuid(p.id)&&Array.isArray(p.objects)&&p.objects.length<=12&&p.objects.every(o=>o&&['box','sphere','plane'].includes(o.kind)&&typeof o.name==='string'&&o.name.length<=96&&arr(o.p,3)&&arr(o.s,3)&&o.s.every(x=>x>=0)&&arr(o.q,4,1.01)&&Math.abs(Math.hypot(...o.q)-1)<.01);
@@ -97,6 +100,9 @@ case 'record_saved':return uuid(p.id);
 case 'record_rejected':return uuid(p.id)&&typeof p.message==='string'&&p.message.length<=200;
 default:return false;}}
 function validPhone3(p){switch(p.type){
+case 'full_ack':return uuid(p.id)&&Number.isInteger(p.index)&&p.index>=-1&&p.index<1678;
+case 'full_loaded':return uuid(p.id);
+case 'full_error':return uuid(p.id)&&typeof p.message==='string'&&p.message.length<=200;
 case 'hello':return p.capabilities===3;
 case 'camera_pose':return arr(p.p,3)&&arr(p.target,3)&&Number.isFinite(p.at)&&Math.hypot(...p.p.map((x,i)=>x-p.target[i]))>.01;
 case 'sensor_state':return typeof p.active==='boolean';
