@@ -4,11 +4,46 @@
   "main": "src/worker.js",
   "compatibility_date": "2026-05-01",
   "workers_dev": true,
-  "observability": {"enabled": false},
-  "durable_objects": {
-    "bindings": [{"name": "ROOMS", "class_name": "PlexikaRoom"}]
+  "observability": {
+    "enabled": false
   },
-  "migrations": [{"tag": "v1", "new_sqlite_classes": ["PlexikaRoom"]}],
-  "rules": [{"type": "Text", "globs": ["**/*.html"], "fallthrough": true}],
-  "vars": {"ALLOWED_ORIGINS": "https://ampirion.github.io"}
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOMS",
+        "class_name": "PlexikaRoom"
+      },
+      {
+        "name": "ALLOCATOR",
+        "class_name": "GirocamAllocator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "PlexikaRoom"
+      ]
+    },
+    {
+      "tag": "v2-public-queue",
+      "new_sqlite_classes": [
+        "GirocamAllocator"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "type": "Text",
+      "globs": [
+        "**/*.html"
+      ],
+      "fallthrough": true
+    }
+  ],
+  "vars": {
+    "ALLOWED_ORIGINS": "https://ampirion.github.io",
+    "MAX_SESSIONS": "100"
+  }
 }
