@@ -44,7 +44,7 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors(request)});
     const configured = typeof env.PAIRING_KEY === 'string' && env.PAIRING_KEY.length >= 24;
     if (request.method === 'GET' && u.pathname === '/health') {
-      return json(request, {service: 'Plexika Girocam relay', protocol: 6, ready: !!env.ALLOCATOR&&!!env.ROOMS&&!!env.EXPORTS, exportsReady:!!env.EXPORTS, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
+      return json(request, {service: 'Plexika Girocam relay', protocol: 7, ready: !!env.ALLOCATOR&&!!env.ROOMS&&!!env.EXPORTS, exportsReady:!!env.EXPORTS, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
     }
     if (request.method === 'GET' && u.pathname === '/') {
       const text = !!env.ALLOCATOR&&!!env.ROOMS
@@ -90,7 +90,7 @@ export default {
 const arr=(a,n,limit=1e9)=>Array.isArray(a)&&a.length===n&&a.every(x=>Number.isFinite(x)&&Math.abs(x)<=limit);
 const uuid=s=>typeof s==='string'&&/^[a-f0-9-]{36}$/.test(s);
 function validHost3(p){switch(p.type){
-case 'zoom_mode':return typeof p.enabled==='boolean';
+case 'camera_zoom_mode':case 'zoom_mode':return typeof p.enabled==='boolean';
 case 'full_begin':return uuid(p.id)&&Number.isInteger(p.length)&&p.length>0&&p.length<=64*1024*1024&&p.chunks===Math.ceil(p.length/40000)&&typeof p.hash==='string'&&/^[0-9a-f]{64}$/.test(p.hash)&&typeof p.media==='boolean';
 case 'full_chunk':return uuid(p.id)&&Number.isInteger(p.index)&&p.index>=0&&p.index<1678&&typeof p.data==='string'&&p.data.length<=40000;
 case 'full_end':case 'full_cancel':return uuid(p.id);
