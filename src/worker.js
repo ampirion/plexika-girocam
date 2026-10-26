@@ -44,11 +44,11 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors(request)});
     const configured = typeof env.PAIRING_KEY === 'string' && env.PAIRING_KEY.length >= 24;
     if (request.method === 'GET' && u.pathname === '/health') {
-      return json(request, {service: 'Plexika Girocam relay', protocol: 8, ready: !!env.ALLOCATOR&&!!env.ROOMS&&!!env.EXPORTS, exportsReady:!!env.EXPORTS, exportQueue:true, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
+      return json(request, {service: 'Plexika Girocam relay', protocol: 9, ready: !!env.ALLOCATOR&&!!env.ROOMS&&!!env.EXPORTS, exportsReady:!!env.EXPORTS, exportQueue:true, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
     }
     if (request.method === 'GET' && u.pathname === '/') {
       const text = !!env.ALLOCATOR&&!!env.ROOMS
-        ? 'Сервер гирокама v8 готов. Открытый доступ: до 100 сеансов и очередь. Основной PAIRING_KEY пользователям не нужен. Бесплатные квоты Cloudflare остаются ограничением.'
+        ? 'Сервер гирокама v9 готов. Открытый доступ: до 100 сеансов и очередь. Основной PAIRING_KEY пользователям не нужен. Бесплатные квоты Cloudflare остаются ограничением.'
         : 'Не хватает привязок сервера v2. Загрузите весь пакет обновления, включая wrangler.jsonc и src/allocator.js. Для публичного режима PAIRING_KEY не требуется.';
       return new Response('<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Plexika Girocam relay</title><body style="background:#102632;color:#deeff7;font:18px system-ui;max-width:700px;margin:12vh auto;padding:24px"><h1>Plexika Girocam relay</h1><p>' + text + '</p><p>Телефон подключается по QR из редактора. Общий сеанс действует 20 минут.</p><a style="color:#8ce0ff" href="/health">Проверка состояния</a></body></html>', {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}});
     }

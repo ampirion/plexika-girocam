@@ -4759,33 +4759,77 @@ return{set,reset,get enabled(){return enabled},get lastSeen(){return lastSeen},g
 
 // Local low-resolution optical tracker. Only scale/rotation/translation numbers leave it.
 function CameraZoom337(move,allowed,status){
- let stream=null,video=null,timer=0,generation=0,on=false,prev=null,points=[],last=0,filtered=0,filteredTurn=0,filteredX=0,filteredY=0;const W=160,H=120,canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;const ctx=canvas.getContext('2d',{willReadFrequently:true});
+ let stream=null,video=null,timer=0,generation=0,on=false,prev=null,points=[],last=0,filtered=0,filteredTurn=0,filteredX=0,filteredY=0,filteredPitch=0,filteredYaw=0,filteredRoll=0;const W=160,H=120,canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;const ctx=canvas.getContext('2d',{willReadFrequently:true});
  const median=a=>{a.sort((a,b)=>a-b);return a.length?a[a.length>>1]:0},clamp=(x,m)=>Math.max(-m,Math.min(m,x));
  function gray(rgba){const a=new Float32Array(W*H);for(let i=0;i<a.length;i++)a[i]=(rgba[i*4]+rgba[i*4+1]*2+rgba[i*4+2])/4;return a;}
  function features(a){const out=[];for(let y=12;y<H-12;y+=13)for(let x=12;x<W-12;x+=13){let best=null;for(let j=-3;j<=3;j+=2)for(let i=-3;i<=3;i+=2){let xx=0,yy=0,xy=0;for(let v=-2;v<=2;v++)for(let u=-2;u<=2;u++){const k=(y+j+v)*W+x+i+u,gx=a[k+1]-a[k-1],gy=a[k+W]-a[k-W];xx+=gx*gx;yy+=gy*gy;xy+=gx*gy;}const score=(xx+yy-Math.sqrt((xx-yy)**2+4*xy*xy))/2;if(score>1800&&(!best||score>best.score))best={x:x+i,y:y+j,score};}if(best)out.push(best);}return out.sort((a,b)=>b.score-a.score).slice(0,48);}
- function match(a,b,p){let best=Infinity,bx=0,by=0;for(let dy=-7;dy<=7;dy++)for(let dx=-7;dx<=7;dx++){const x=p.x+dx,y=p.y+dy;if(x<3||y<3||x>=W-3||y>=H-3)continue;let err=0,offset=0;for(let v=-2;v<=2;v++)for(let u=-2;u<=2;u++)offset+=b[(y+v)*W+x+u]-a[(p.y+v)*W+p.x+u];offset/=25;for(let v=-2;v<=2;v++)for(let u=-2;u<=2;u++){const d=b[(y+v)*W+x+u]-a[(p.y+v)*W+p.x+u]-offset;err+=d*d;}if(err<best){best=err;bx=x;by=y;}}return best/25<350?{x:bx,y:by}:null;}
+ function match(a,b,p){
+  let best=Infinity,bx=0,by=0,bestX=7,bestY=7;const errors=new Float64Array(225),px=Math.round(p.x),py=Math.round(p.y);
+  for(let dy=-7;dy<=7;dy++)for(let dx=-7;dx<=7;dx++){
+   const x=px+dx,y=py+dy,index=(dy+7)*15+dx+7;errors[index]=Infinity;if(x<3||y<3||x>=W-3||y>=H-3)continue;let err=0,offset=0;
+   for(let v=-2;v<=2;v++)for(let u=-2;u<=2;u++)offset+=b[(y+v)*W+x+u]-a[(py+v)*W+px+u];offset/=25;
+   for(let v=-2;v<=2;v++)for(let u=-2;u<=2;u++){const d=b[(y+v)*W+x+u]-a[(py+v)*W+px+u]-offset;err+=d*d;}
+   errors[index]=err;if(err<best){best=err;bx=x;by=y;bestX=dx+7;bestY=dy+7;}
+  }
+  if(best/25>=350)return null;
+  function refine(center,left,right){const den=left-2*center+right;if(!Number.isFinite(den)||Math.abs(den)<1e-9)return 0;return clamp((left-right)/(2*den),.5);}
+  const sx=bestX>0&&bestX<14?refine(errors[bestY*15+bestX],errors[bestY*15+bestX-1],errors[bestY*15+bestX+1]):0,sy=bestY>0&&bestY<14?refine(errors[bestY*15+bestX],errors[(bestY-1)*15+bestX],errors[(bestY+1)*15+bestX]):0;
+  return{x:bx+sx,y:by+sy};
+ }
+ // Planar inter-frame homography: a numeric optical estimate, not physical 6DoF tracking.
+ function solve8(A,b){const M=A.map((r,i)=>[...r,b[i]]);for(let c=0;c<8;c++){let p=c;for(let r=c+1;r<M.length;r++)if(Math.abs(M[r][c])>Math.abs(M[p][c]))p=r;if(Math.abs(M[p][c])<1e-10)return null;[M[c],M[p]]=[M[p],M[c]];for(let r=0;r<M.length;r++){if(r===c)continue;const f=M[r][c]/M[c][c];for(let k=c;k<9;k++)M[r][k]-=f*M[c][k];}}return M.slice(0,8).map((r,i)=>r[8]/r[i]);}
+ function rotationEstimate(pairs){
+  const F=140,normalized=pairs.map(([p,q])=>({x:(p.x-W/2)/F,y:-(p.y-H/2)/F,u:(q.x-W/2)/F,v:-(q.y-H/2)/F}));
+  function fit(list){
+   const A=[],b=[];for(const p of list){const{x,y,u,v}=p;A.push([x,y,1,0,0,0,-u*x,-u*y],[0,0,0,x,y,1,-v*x,-v*y]);b.push(u,v);}return solve8(A,b);
+  }
+  function residual(h,p){const d=h[6]*p.x+h[7]*p.y+1;if(Math.abs(d)<1e-7)return Infinity;return Math.hypot((h[0]*p.x+h[1]*p.y+h[2])/d-p.u,(h[3]*p.x+h[4]*p.y+h[5])/d-p.v)*F;}
+  let h=fit(normalized),errors=h?normalized.map(p=>residual(h,p)):[],best=null,seed=(pairs.length*2654435761)>>>0;
+  for(let iteration=0;iteration<24;iteration++){
+   const sample=[],used=new Set();while(sample.length<4){seed=(seed*1664525+1013904223)>>>0;const i=seed%normalized.length;if(!used.has(i)){used.add(i);sample.push(normalized[i]);}}
+   const candidate=fit(sample);if(!candidate)continue;const err=normalized.map(p=>residual(candidate,p)),inlierIdx=err.map((e,i)=>e<1.8?i:-1).filter(i=>i>=0);if(inlierIdx.length<8)continue;
+   const ordered=inlierIdx.map(i=>err[i]).sort((a,b)=>a-b),score=inlierIdx.length-ordered[ordered.length>>1]*.08;if(!best||score>best.score)best={h:candidate,inlierIdx,score};
+  }
+  if(best){const refined=fit(best.inlierIdx.map(i=>normalized[i]));if(refined)h=refined;errors=normalized.map(p=>residual(h,p));}
+  if(!h||!errors.length)return null;const inlierIdx=errors.map((e,i)=>e<2?i:-1).filter(i=>i>=0);if(inlierIdx.length<8)return null;
+  const inliers=inlierIdx.map(i=>normalized[i]),med=median(inlierIdx.map(i=>errors[i]));if(!Number.isFinite(med)||med>2.2)return null;
+  const c0=[h[0],h[3],h[6]],c1=[h[1],h[4],h[7]],c2=[h[2],h[5],1],norm=v=>{const l=Math.hypot(...v);return l>1e-8?v.map(x=>x/l):null},dot=(a,b)=>a.reduce((s,x,i)=>s+x*b[i],0),cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+  const r0=norm(c0);if(!r0)return null;const r1=norm(c1.map((x,i)=>x-dot(c1,r0)*r0[i]));if(!r1)return null;const r2=cross(r0,r1);if(dot(r2,c2)<0)return null;
+  const R=[[r0[0],r1[0],r2[0]],[r0[1],r1[1],r2[1]],[r0[2],r1[2],r2[2]]];
+  const pitch=Math.asin(clamp(-R[1][2],1)),yaw=Math.atan2(R[0][2],R[2][2]),roll=Math.atan2(R[1][0],R[1][1]);
+  if(![pitch,yaw,roll].every(Number.isFinite))return null;
+  return{pitch:clamp(pitch,.05),yaw:clamp(yaw,.05),roll:clamp(roll,.05),residual:med,inliers:inliers.length};
+ }
  function estimate(a,b,pts){
   const pairs=[];for(const p of pts){const q=match(a,b,p);if(!q)continue;const back=match(b,a,q);if(back&&Math.hypot(back.x-p.x,back.y-p.y)<1.6)pairs.push([p,q]);}
-  if(pairs.length<8)return{step:0,turn:0,x:0,y:0,tracked:pairs.length};
+  if(pairs.length<8)return{step:0,turn:0,x:0,y:0,pitch:0,yaw:0,roll:0,optical:false,tracked:pairs.length};
   const ratios=[],angles=[],dx=[],dy=[];
   for(const [p,q]of pairs){dx.push(q.x-p.x);dy.push(q.y-p.y);}
   for(let i=0;i<pairs.length;i++)for(let j=i+1;j<pairs.length;j++){
    const p0=pairs[i][0],p1=pairs[j][0],q0=pairs[i][1],q1=pairs[j][1],d=Math.hypot(p0.x-p1.x,p0.y-p1.y);
    if(d>35){ratios.push(Math.log(Math.hypot(q0.x-q1.x,q0.y-q1.y)/d));let angle=Math.atan2(q0.y-q1.y,q0.x-q1.x)-Math.atan2(p0.y-p1.y,p0.x-p1.x);if(angle>Math.PI)angle-=Math.PI*2;if(angle<-Math.PI)angle+=Math.PI*2;angles.push(angle);}
   }
-  const scale=median(ratios),mad=median(ratios.map(x=>Math.abs(x-scale))),turn=median(angles),turnMad=median(angles.map(x=>Math.abs(x-turn))),good=ratios.length>20&&mad<.045&&turnMad<.08;
-  return{step:good?clamp(scale,.035):0,turn:good?clamp(turn,.05):0,x:good?clamp(median(dx),6):0,y:good?clamp(median(dy),6):0,tracked:pairs.length};
+  const scale=median(ratios),mad=median(ratios.map(x=>Math.abs(x-scale))),turn=median(angles),turnMad=median(angles.map(x=>Math.abs(x-turn))),good=ratios.length>20&&mad<.045&&turnMad<.08;let optical=rotationEstimate(pairs);
+  if(optical){
+   const s=Math.exp(scale),cs=Math.cos(turn),sn=Math.sin(turn),cx=W/2,cy=H/2,tx=[],ty=[];
+   for(const [p,q]of pairs){tx.push(q.x-(cx+s*(cs*(p.x-cx)-sn*(p.y-cy))));ty.push(q.y-(cy+s*(sn*(p.x-cx)+cs*(p.y-cy))));}
+   const mx=median(tx),my=median(ty),similarity=median(pairs.map(([p,q])=>Math.hypot(q.x-(cx+s*(cs*(p.x-cx)-sn*(p.y-cy))+mx),q.y-(cy+s*(sn*(p.x-cx)+cs*(p.y-cy))+my))));
+   // Do not invent perspective angles when the legacy similarity explains the same frame.
+   if(similarity<.7||similarity<optical.residual*1.35+.25)optical=null;
+  }
+  return{step:good?clamp(scale,.035):0,turn:good?clamp(turn,.05):0,x:good?clamp(median(dx),6):0,y:good?clamp(median(dy),6):0,pitch:optical?.pitch||0,yaw:optical?.yaw||0,roll:optical?.roll||0,optical:!!optical,residual:optical?.residual??null,inliers:optical?.inliers||0,tracked:pairs.length};
  }
- function reset(){prev=null;points=[];filtered=filteredTurn=filteredX=filteredY=0;last=0;}
+ function reset(){prev=null;points=[];filtered=filteredTurn=filteredX=filteredY=filteredPitch=filteredYaw=filteredRoll=0;last=0;}
  function tick(){if(!on)return;timer=setTimeout(tick,85);if(!video||video.readyState<2||!allowed()){reset();return;}ctx.drawImage(video,0,0,W,H);const a=gray(ctx.getImageData(0,0,W,H).data),t=performance.now();if(prev&&t-last<400){
    const r=estimate(prev,a,points);filtered=filtered*.35+r.step*.65;filteredTurn=filteredTurn*.35+r.turn*.65;filteredX=filteredX*.35+r.x*.65;filteredY=filteredY*.35+r.y*.65;
-   if(r.tracked>=8){const rotation={turn:Math.abs(filteredTurn)>.0007?filteredTurn:0,x:Math.abs(filteredX)>.08?filteredX:0,y:Math.abs(filteredY)>.08?filteredY:0},step=Math.abs(filtered)>.0018?filtered*2:0;if(step||rotation.turn||rotation.x||rotation.y)move(step,rotation);}
-   status(true,r.tracked>=8?'Камера: ZOOM + поворот · '+r.tracked+' точек':'Наведите камеру на неподвижные детали');
+   if(r.optical){filteredPitch=filteredPitch*.35+r.pitch*.65;filteredYaw=filteredYaw*.35+r.yaw*.65;filteredRoll=filteredRoll*.35+r.roll*.65;}else filteredPitch=filteredYaw=filteredRoll=0;
+   if(r.tracked>=8){const rotation={turn:Math.abs(filteredTurn)>.0007?filteredTurn:0,x:Math.abs(filteredX)>.08?filteredX:0,y:Math.abs(filteredY)>.08?filteredY:0,pitch:Math.abs(filteredPitch)>.00045?filteredPitch:0,yaw:Math.abs(filteredYaw)>.00045?filteredYaw:0,roll:Math.abs(filteredRoll)>.00045?filteredRoll:0,optical:r.optical},step=Math.abs(filtered)>.0018?filtered*2:0;if(step||rotation.turn||rotation.x||rotation.y||rotation.pitch||rotation.yaw||rotation.roll)move(step,rotation);}
+   status(true,r.tracked>=8?'Камера: ZOOM + повороты 3 осей · '+r.tracked+' точек':'Наведите камеру на неподвижные детали');
   }prev=a;points=features(a);last=t;
  }
  function stop(){generation++;on=false;clearTimeout(timer);stream?.getTracks().forEach(t=>t.stop());stream=null;if(video){video.srcObject=null;video.remove();video=null;}reset();status(false,'');}
  async function set(value){stop();if(!value)return;const g=generation;try{if(!navigator.mediaDevices?.getUserMedia)throw Error('Для камеры нужен HTTPS и разрешение браузера');status(true,'Разрешите заднюю камеру');const s=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:320},height:{ideal:240},frameRate:{ideal:15,max:20}}});if(g!==generation){s.getTracks().forEach(t=>t.stop());return;}stream=s;video=document.createElement('video');video.muted=true;video.playsInline=true;video.style.cssText='position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:.001;pointer-events:none';document.body.append(video);video.srcObject=s;await video.play();if(g!==generation)return;on=true;status(true,'Камера: ищу точки');tick();}catch(e){if(g!==generation)return;stop();status(false,e.name==='NotAllowedError'?'Камера не разрешена':e.message);}}
- document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});window.addEventListener('pagehide',stop);return{set,stop,reset,get enabled(){return on},analyze:(a,b)=>estimate(a,b,features(a))};
+ document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();});window.addEventListener('pagehide',stop);return{set,stop,reset,get enabled(){return on},analyze:(a,b)=>estimate(a,b,features(a)),analyzePairs:pairs=>rotationEstimate(pairs)};
 }
 
 const finite=(a,n)=>Array.isArray(a)&&a.length===n&&a.every(Number.isFinite),now=()=>performance.now();function send(p){if(socket?.readyState===1&&peer&&socket.bufferedAmount<65536){socket.send(JSON.stringify({v:3,token,...p}));return true;}return false;}
@@ -4812,7 +4856,7 @@ const toggle337=document.createElement('button');toggle337.id='panelToggle337';t
 function closePanel337(value){$('shell').classList.toggle('controlsClosed337',value);toggle337.setAttribute('aria-expanded',String(!value));window.dispatchEvent(new Event('resize'));setTimeout(()=>fullFrame334?.contentWindow?.postMessage({type:'plexika-resize335',channel:fullChannel334},'*'),80);}toggle337.onclick=()=>closePanel337(!$('shell').classList.contains('controlsClosed337'));
 rotate337.onclick=async()=>{try{if(!document.fullscreenElement)await $('shell').requestFullscreen?.();await screen.orientation?.lock?.(screen.orientation.type==='landscape-primary'?'landscape-secondary':'landscape-primary');}catch{note('Поверните телефон; разрешите автоповорот в ОС');}setTimeout(()=>window.dispatchEvent(new Event('resize')),100);};
 const cameraLabel337=document.createElement('label');cameraLabel337.id='cameraLabel337';cameraLabel337.innerHTML='<input id="cameraZoom337" type="checkbox"> Использовать камеру для ZOOM';const cameraStatus337=document.createElement('span');cameraStatus337.id='cameraStatus337';cameraStatus337.setAttribute('role','status');$('calibrate').after(cameraLabel337,cameraStatus337);
-const camera337=CameraZoom337((step,rot={})=>{if(!pose)return;pose.p=M333.add(pose.p,M333.scale(M333.rot([0,0,-1],pose.q),step*pose.distance));const d=M333.euler(rot.y*.002||0,rot.x*.002||0,-(rot.turn||0));pose.q=M333.norm(M333.mul(pose.q,d));if(baseQ)baseQ=M333.norm(M333.mul(baseQ,d));if(wantedQ)wantedQ=M333.norm(M333.mul(wantedQ,d));postFullPose334(true);},()=>active&&!held&&!closing&&!!pose,(enabled,message)=>{$('cameraZoom337').checked=enabled;cameraStatus337.textContent=message;send({type:'zoom_status',enabled,message:message||'Камера ZOOM выключена'});});$('cameraZoom337').onchange=()=>{if(!active){$('cameraZoom337').checked=false;note('Сначала включите датчики');return;}zoom335.set(false);camera337.set($('cameraZoom337').checked);};
+const camera337=CameraZoom337((step,rot={})=>{if(!pose)return;pose.p=M333.add(pose.p,M333.scale(M333.rot([0,0,-1],pose.q),step*pose.distance));const d=rot.optical?M333.euler(rot.pitch||0,rot.yaw||0,rot.roll||0):M333.euler(rot.y*.002||0,rot.x*.002||0,-(rot.turn||0));pose.q=M333.norm(M333.mul(pose.q,d));if(baseQ)baseQ=M333.norm(M333.mul(baseQ,d));if(wantedQ)wantedQ=M333.norm(M333.mul(wantedQ,d));postFullPose334(true);},()=>active&&!held&&!closing&&!!pose,(enabled,message)=>{$('cameraZoom337').checked=enabled;cameraStatus337.textContent=message;send({type:'zoom_status',enabled,message:message||'Камера ZOOM выключена'});});$('cameraZoom337').onchange=()=>{if(!active){$('cameraZoom337').checked=false;note('Сначала включите датчики');return;}zoom335.set(false);camera337.set($('cameraZoom337').checked);};
 
 /* Perspective proxy renderer. Clip in camera space BEFORE projection, including faces crossing the eye. */
 const Proxy333=(()=>{const canvas=$('scene'),ctx=canvas.getContext('2d',{alpha:false});let objects=[],geometry=[],frames=0,lastRender=0,visible=0,clippedFaces=0;const{add,sub,rot,inv}=M333;
