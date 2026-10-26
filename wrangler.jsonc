@@ -54,6 +54,7 @@
   ],
   "vars": {
     "ALLOWED_ORIGINS": "https://ampirion.github.io",
-    "MAX_SESSIONS": "100"
+    "MAX_SESSIONS": "100",
+    "EXPORT_LIMIT_BYTES": "524288000"
   }
 }
