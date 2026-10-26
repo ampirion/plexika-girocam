@@ -1,4 +1,5 @@
 import phoneHTML from './phone.html';
+import openHTML from './open.html';
 export {GirocamAllocator} from './allocator.js';
 
 // Only ephemeral pairing credentials are stored. Sensor readings are forwarded,
@@ -37,19 +38,20 @@ function json(request, data, status = 200) {
 export default {
   async fetch(request, env) {
     const u = new URL(request.url);
-    const publicRoute = u.pathname === '/health' || u.pathname === '/v2/lobby' || /^\/v1\/sessions\/[a-f0-9-]{36}\/ws$/.test(u.pathname);
+    const publicRoute = u.pathname === '/open' || u.pathname === '/health' || u.pathname === '/v2/lobby' || /^\/v1\/sessions\/[a-f0-9-]{36}\/ws$/.test(u.pathname);
     if (!publicRoute && !originAllowed(request, env)) return new Response('Origin not allowed', {status: 403});
     if (request.method === 'OPTIONS') return new Response(null, {status: 204, headers: cors(request)});
     const configured = typeof env.PAIRING_KEY === 'string' && env.PAIRING_KEY.length >= 24;
     if (request.method === 'GET' && u.pathname === '/health') {
-      return json(request, {service: 'Plexika Girocam relay', protocol: 4, ready: !!env.ALLOCATOR&&!!env.ROOMS, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
+      return json(request, {service: 'Plexika Girocam relay', protocol: 5, ready: !!env.ALLOCATOR&&!!env.ROOMS, public: !!env.ALLOCATOR&&!!env.ROOMS, legacyKeyReady: configured, limit: Math.max(1,Math.min(100,Number(env.MAX_SESSIONS)||100))});
     }
     if (request.method === 'GET' && u.pathname === '/') {
       const text = !!env.ALLOCATOR&&!!env.ROOMS
-        ? 'Сервер гирокама v4 готов. Открытый доступ: до 100 сеансов и очередь. Основной PAIRING_KEY пользователям не нужен. Бесплатные квоты Cloudflare остаются ограничением.'
+        ? 'Сервер гирокама v5 готов. Открытый доступ: до 100 сеансов и очередь. Основной PAIRING_KEY пользователям не нужен. Бесплатные квоты Cloudflare остаются ограничением.'
         : 'Не хватает привязок сервера v2. Загрузите весь пакет обновления, включая wrangler.jsonc и src/allocator.js. Для публичного режима PAIRING_KEY не требуется.';
       return new Response('<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Plexika Girocam relay</title><body style="background:#102632;color:#deeff7;font:18px system-ui;max-width:700px;margin:12vh auto;padding:24px"><h1>Plexika Girocam relay</h1><p>' + text + '</p><p>Телефон подключается по QR из редактора. Сеанс действует два часа.</p><a style="color:#8ce0ff" href="/health">Проверка состояния</a></body></html>', {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store'}});
     }
+    if(request.method==='GET'&&u.pathname==='/open')return new Response(openHTML,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','Permissions-Policy':'accelerometer=(self), gyroscope=(self), magnetometer=(self)'}});
     if (request.method === 'GET' && u.pathname === '/phone') {
       return new Response(phoneHTML, {headers: {'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff'}});
     }
@@ -84,6 +86,7 @@ export default {
 const arr=(a,n,limit=1e9)=>Array.isArray(a)&&a.length===n&&a.every(x=>Number.isFinite(x)&&Math.abs(x)<=limit);
 const uuid=s=>typeof s==='string'&&/^[a-f0-9-]{36}$/.test(s);
 function validHost3(p){switch(p.type){
+case 'zoom_mode':return typeof p.enabled==='boolean';
 case 'full_begin':return uuid(p.id)&&Number.isInteger(p.length)&&p.length>0&&p.length<=64*1024*1024&&p.chunks===Math.ceil(p.length/40000)&&typeof p.hash==='string'&&/^[0-9a-f]{64}$/.test(p.hash)&&typeof p.media==='boolean';
 case 'full_chunk':return uuid(p.id)&&Number.isInteger(p.index)&&p.index>=0&&p.index<1678&&typeof p.data==='string'&&p.data.length<=40000;
 case 'full_end':case 'full_cancel':return uuid(p.id);
@@ -100,6 +103,7 @@ case 'record_saved':return uuid(p.id);
 case 'record_rejected':return uuid(p.id)&&typeof p.message==='string'&&p.message.length<=200;
 default:return false;}}
 function validPhone3(p){switch(p.type){
+case 'zoom_status':return typeof p.enabled==='boolean'&&typeof p.message==='string'&&p.message.length<=120;
 case 'full_ack':return uuid(p.id)&&Number.isInteger(p.index)&&p.index>=-1&&p.index<1678;
 case 'full_loaded':return uuid(p.id);
 case 'full_error':return uuid(p.id)&&typeof p.message==='string'&&p.message.length<=200;
