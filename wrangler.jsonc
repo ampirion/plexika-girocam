@@ -16,6 +16,10 @@
       {
         "name": "ALLOCATOR",
         "class_name": "GirocamAllocator"
+      },
+      {
+        "name": "EXPORTS",
+        "class_name": "PlexikaExport"
       }
     ]
   },
@@ -30,6 +34,12 @@
       "tag": "v2-public-queue",
       "new_sqlite_classes": [
         "GirocamAllocator"
+      ]
+    },
+    {
+      "tag": "v6-temp-exports",
+      "new_sqlite_classes": [
+        "PlexikaExport"
       ]
     }
   ],
